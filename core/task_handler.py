@@ -170,7 +170,7 @@ def _load_signals() -> dict[str, list[str]]:
             "[hermes-a2a] classify keywords loaded from %s (%d buckets)",
             candidate, len(loaded),
         )
-    except (OSError, json.JSONDecodeError, ValueError) as e:
+    except Exception as e:
         logger.warning(
             "[hermes-a2a] classify keywords file %s unreadable (%s); using defaults",
             candidate, e,
@@ -190,6 +190,9 @@ def _classify(status: str, response: str, error: str = "") -> dict:
         if error and "timeout" in error.lower():
             return {"semantic_status": "failed", "completion_reason": "timeout"}
         return {"semantic_status": "failed", "completion_reason": "agent_error"}
+
+    if status == "completed" and not response.strip():
+        return {"semantic_status": "degraded", "completion_reason": "empty_response"}
 
     r = response.lower()
     signals = _load_signals()
@@ -262,7 +265,7 @@ def _ensure_comment_kind_backfill(task_id: str | None = None) -> dict | None:
     if not db_path.is_file():
         return None
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(str(db_path), timeout=30)
     except sqlite3.Error as e:
         logger.warning("[hermes-a2a] backfill: cannot open %s: %s", db_path, e)
         return None
@@ -309,9 +312,18 @@ def _ensure_comment_kind_backfill(task_id: str | None = None) -> dict | None:
 
 
 def handle_task(task: dict) -> dict:
+    if not isinstance(task, dict):
+        return {"id": "unknown", "status": "failed", "error": "Invalid task: expected object"}
+
+    task = dict(task)
     tid = task.get("id", "unknown")
     msg = task.get("message") or task.get("input") or task.get("action") or {}
-    prompt = msg if isinstance(msg, str) else (msg.get("text") or msg.get("prompt") or _extract_from_parts(msg.get("parts", [])))
+    if isinstance(msg, str):
+        prompt = msg
+    elif isinstance(msg, dict):
+        prompt = msg.get("text") or msg.get("prompt") or _extract_from_parts(msg.get("parts", []))
+    else:
+        prompt = ""
     if not prompt:
         task["status"] = "failed"
         task["error"] = "Empty message"
@@ -342,6 +354,7 @@ def handle_task(task: dict) -> dict:
 
 def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:
     """Execute task via Hermes /v1/runs API (thin adapter mode)."""
+    task = dict(task)
     port = _api_server_port(profile)
     start = time.time()
 
@@ -457,6 +470,7 @@ def _ensure_m2cl_symlinks(resolved: list, profile: str) -> None:
 
 def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
     """Execute task via hermes chat subprocess (fallback mode)."""
+    task = dict(task)
     start = time.time()
     cmd = [_hermes_bin(), "chat", "-q", prompt, "--quiet"]
     if profile:
@@ -495,7 +509,18 @@ def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
     return task
 
 def _extract_from_parts(parts: list) -> str:
+    if not isinstance(parts, list):
+        return ""
+    chunks: list[str] = []
     for p in parts:
-        if p.get("type") == "text":
-            return p.get("text", "")
-    return ""
+        if not isinstance(p, dict):
+            continue
+        kind = p.get("type")
+        if kind == "text":
+            text = p.get("text", "")
+            if text:
+                chunks.append(str(text))
+        elif kind in {"image", "audio", "file", "tool_use"}:
+            label = p.get("name") or p.get("url") or p.get("mimeType") or "attachment"
+            chunks.append(f"[{kind}: {label}]")
+    return "\n".join(chunks)
