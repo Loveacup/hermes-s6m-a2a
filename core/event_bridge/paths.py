@@ -23,6 +23,18 @@ def cursors_dir() -> Path:
     return event_bridge_home() / "cursors"
 
 
+def audit_dir() -> Path:
+    """L1 本地紧凑审计归档目录（按日 JSONL / gzip）。ENV 可覆盖。"""
+    explicit = os.environ.get("EVENT_BRIDGE_AUDIT_DIR")
+    return Path(explicit) if explicit else event_bridge_home() / "audit"
+
+
+def rollup_dir() -> Path:
+    """L1.5 滚动汇总目录（按月聚合）。ENV 可覆盖。"""
+    explicit = os.environ.get("EVENT_BRIDGE_ROLLUP_DIR")
+    return Path(explicit) if explicit else event_bridge_home() / "rollup"
+
+
 def obsidian_event_dir() -> Path:
     return obsidian_vault() / "88_event-bridge"
 

@@ -287,12 +287,18 @@ def test_s1_health_scan_chain():
     # 6. 刑部稽核
     checks["刑部稽核"] = results.get("tester", {}).get("status") == "completed"
 
-    # 7. 史馆归档
+    # 7. 史馆归档 — Phase 1 后优先查本地紧凑 audit store；回退 vault md（Phase 4 前兼容）
+    def _recent(paths, window):
+        recent = sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)[:10]
+        return len(recent) > 0 and any(time.time() - f.stat().st_mtime < window for f in recent)
+
+    window = elapsed + 120
+    audit_root = Path(os.path.expanduser("~/.hermes/event-bridge/audit/"))
     bridge_root = Path(os.path.expanduser("~/Documents/Obsidian/AlexCai/88_event-bridge/"))
-    recent_files = sorted(bridge_root.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]
-    checks["史馆归档"] = len(recent_files) > 0 and any(
-        time.time() - f.stat().st_mtime < elapsed + 120 for f in recent_files
-    )
+    audit_hit = audit_root.is_dir() and _recent(
+        list(audit_root.glob("*.jsonl")) + list(audit_root.glob("*.jsonl.gz")), window)
+    vault_hit = bridge_root.is_dir() and _recent(list(bridge_root.rglob("*.md")), window)
+    checks["史馆归档"] = audit_hit or vault_hit
 
     # 8. 总耗时
     checks["总耗时≤30min"] = elapsed <= 1800

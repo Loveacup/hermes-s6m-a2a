@@ -17,15 +17,25 @@ from typing import Iterable
 
 from .core import Sink, dispatch_all
 from .paths import jsonl_paths_for_all_profiles
-from .sinks.obsidian import ObsidianSink
-from .sinks.supermemory import SupermemorySink
+from .sinks.audit import AuditSink
+from .sinks.obsidian import ObsidianSink, per_event_enabled
+from .sinks.supermemory import SupermemorySink, supermemory_enabled
 
 log = logging.getLogger("event_bridge.daemon")
 
 
 def default_sinks() -> list[Sink]:
-    sinks: list[Sink] = [ObsidianSink()]
-    if os.environ.get("SUPERMEMORY_API_KEY"):
+    # AuditSink: 本地紧凑权威层（L1），inode 友好，始终启用
+    sinks: list[Sink] = [AuditSink()]
+    # ObsidianSink: 逐事件 md，受 Phase 0 开关控制（默认开，兼容历史）
+    if per_event_enabled():
+        sinks.append(ObsidianSink())
+    else:
+        log.info("EVENT_BRIDGE_OBSIDIAN_PER_EVENT 关闭，跳过 ObsidianSink 逐事件写入")
+    # SupermemorySink: 受开关 + API key 双重控制
+    if not supermemory_enabled():
+        log.info("EVENT_BRIDGE_SUPERMEMORY_ENABLED 关闭，跳过 SupermemorySink")
+    elif os.environ.get("SUPERMEMORY_API_KEY"):
         sinks.append(SupermemorySink())
     else:
         log.info("SUPERMEMORY_API_KEY 未设置，跳过 SupermemorySink")

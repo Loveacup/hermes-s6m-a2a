@@ -33,6 +33,23 @@ _DEFAULT_CONTAINER_TAG = "hermes"
 _DEFAULT_API_URL = "https://api.supermemory.ai"
 
 
+def supermemory_enabled() -> bool:
+    """Supermemory sink 是否启用（默认 True，保持向后兼容）.
+
+    关闭后 daemon 不再向 Supermemory 投递任何事件。
+
+    背景（安置方案 §10 决策 4）：本地 AuditSink 已提供可靠全量副本，
+    而 full-volume 原始事件进 Supermemory 当前失败率 >100%（read timeout）
+    且无语义价值。部署层建议在 AuditSink 实测验证后置 0；但代码默认仍为
+    True，绝不在未验证前改变行为。Phase 2 的「关键事件白名单」仍可经此开关
+    保留 Supermemory 的语义检索价值。
+    """
+    val = os.environ.get("EVENT_BRIDGE_SUPERMEMORY_ENABLED")
+    if val is None:
+        return True
+    return val.strip().lower() not in ("0", "false", "off", "no")
+
+
 def _load_profile_map() -> dict[str, str]:
     """读取 ~/.hermes/supermemory.json，返回 profile → container_tag 映射."""
     cfg = hermes_home() / "supermemory.json"
