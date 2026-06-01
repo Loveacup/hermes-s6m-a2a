@@ -13,6 +13,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+# P0-2 GREEN phase expectations: after engineer adds isinstance guard in
+# handle_task, these tests should pass.  Currently fail because the guard
+# does not exist yet (RED phase captured by
+# TestVuln02_MessageFieldTypeConfusion in test_task_handler_vulnerabilities.py).
+_XFAIL_MSG_TYPE = "P0-2: message field type confusion — needs isinstance guard in handle_task"
+
 
 # ── R8: 所有 profile 走 API Server 路径（无白名单） ───────────
 
@@ -89,3 +95,98 @@ def test_th_t4_api_server_success_path(monkeypatch):
     result = task_handler._via_api_server(task, "t1", "say hi", "engineer")
     assert result["status"] == "completed"
     assert result["artifact"]["mode"] == "api_server"
+
+
+# ── P0-13: 输入校验缺失 ──────────────────────────────────
+
+def test_th_t5_handle_task_none_input():
+    """handle_task(None) 应抛出 AttributeError 而非静默失败。
+
+    防御性编程：函数签名标注 task: dict 但无运行时守卫。
+    server.py 调用链已有 _execute_task 的 'if not task: return' 守卫，
+    此测试确保直接调用时的行为可预期。
+    """
+    import task_handler
+    with pytest.raises(AttributeError, match="NoneType.*has no attribute.*get"):
+        task_handler.handle_task(None)
+
+
+def test_th_t6_handle_task_non_dict_input():
+    """handle_task 接收非 dict 入参应抛出 AttributeError 而非静默处理。"""
+    import task_handler
+    with pytest.raises(AttributeError):
+        task_handler.handle_task("not_a_dict")
+    with pytest.raises(AttributeError):
+        task_handler.handle_task(42)
+    with pytest.raises(AttributeError):
+        task_handler.handle_task([1, 2, 3])
+
+
+@pytest.mark.xfail(reason=_XFAIL_MSG_TYPE, strict=True)
+def test_th_t7_handle_task_list_message_field():
+    """handle_task 接收 message=[1,2,3] 应不崩溃，优雅处理为 failed。
+
+    攻击面验证：
+      POST /a2a/tasks  →  {"message": [1, 2, 3]}
+      server.py 第238行 raw_msg = body.get("message")  ← 无类型校验
+      server.py 第243行 task["message"] = raw_msg       ← 原样存储
+      server.py 第301行 result = handle_task(task)      ← 传入 handle_task
+      task_handler.py 第314行 msg.get("text")           ← AttributeError!
+    """
+    import task_handler
+    task = {
+        "id": "t7-list-msg",
+        "message": [1, 2, 3],
+    }
+    # 不应抛出 AttributeError, 应返回 failed 状态
+    result = task_handler.handle_task(task)
+    assert result["status"] == "failed", \
+        f"expected status=failed, got {result.get('status')}"
+    assert "error" in result, \
+        f"expected error message in result, got {result}"
+
+
+@pytest.mark.xfail(reason=_XFAIL_MSG_TYPE, strict=True)
+def test_th_t8_handle_task_numeric_message_field():
+    """handle_task 接收 message=12345 应不崩溃，优雅处理为 failed。"""
+    import task_handler
+    task = {
+        "id": "t8-num-msg",
+        "message": 12345,
+    }
+    result = task_handler.handle_task(task)
+    assert result["status"] == "failed"
+    assert "error" in result
+
+
+@pytest.mark.xfail(reason=_XFAIL_MSG_TYPE, strict=True)
+def test_th_t9_handle_task_bool_message_field():
+    """handle_task 接收 message=True 应不崩溃，优雅处理为 failed。"""
+    import task_handler
+    task = {
+        "id": "t9-bool-msg",
+        "message": True,
+    }
+    result = task_handler.handle_task(task)
+    assert result["status"] == "failed"
+    assert "error" in result
+
+
+def test_th_t10_server_raw_msg_no_type_check():
+    """验证 server.py 的 raw_msg 提取路径没有运行时类型校验。
+
+    直接调用 task_handler._via_api_server 或 handle_task
+    模拟 server._execute_task 传入了 message 为 list 的 task。
+    此项为设计约束确认 — 确保类型校验必须添加在 task_handler 层。
+    """
+    import task_handler
+    # 模拟 server.py 构造的 task: message 从 JSON body 直接提取
+    malicious_task = {
+        "id": "t10-raw-msg",
+        "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+    }
+    # dict 类型 message 是合法路径，不应失败
+    result = task_handler.handle_task(malicious_task)
+    # 因为没有设置 profile/env，预期会走到 try/except 捕获异常
+    # 但不应因 AttributeError 崩溃
+    assert isinstance(result, dict), "handle_task 必须返回 dict，不得抛出异常"

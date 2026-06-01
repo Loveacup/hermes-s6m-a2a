@@ -2,3 +2,12 @@ __pycache__/
 *.pyc
 .env
 *.log
+
+# Local agent/session artifacts
+.claude/
+.hermes/
+output/
+s6m-config/docs/briefings/
+
+# Generated test reports
+tests/unit/test_report*.json
